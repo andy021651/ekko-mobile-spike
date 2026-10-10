@@ -206,6 +206,8 @@ async function playBlob() {
     const blob = await (await api(`files/${videoFileId}`, { alt: 'media' })).blob();
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
     const player = document.getElementById('player');
+    player.onloadedmetadata = null;
+    player.onerror = null;
     player.src = URL.createObjectURL(new Blob([blob], { type: 'video/mp4' }));
     log(`D 整檔下載：${(blob.size / 1048576).toFixed(1)} MB，花 ${seconds} 秒`, 'ok');
     player.play().catch(() => {});
