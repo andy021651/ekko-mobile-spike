@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Ekko 測試">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Ekko 手機測試</title>
+<!-- 第 0 步：驗證手機網頁讀得到雲端硬碟裡電腦傳的檔、影片邊下載邊播、收得到推播。不是正式版。 -->
+<style>
+  :root { --bg: #fff; --fg: #1d1d1f; --muted: #6e6e73; --line: #e5e5ea; --ok: #1a7f37; --bad: #c62828; --btn: #1d1d1f; --btn-fg: #fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #000; --fg: #f5f5f7; --muted: #98989d; --line: #2c2c2e; --ok: #4ac26b; --bad: #ff6b6b; --btn: #f5f5f7; --btn-fg: #000; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px 16px calc(32px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--fg);
+         font: 16px/1.5 -apple-system, BlinkMacSystemFont, "PingFang TC", sans-serif; }
+  h1 { font-size: 22px; margin: 8px 0 4px; }
+  h2 { font-size: 17px; margin: 0 0 8px; }
+  p, small { color: var(--muted); }
+  section { border-top: 1px solid var(--line); padding: 16px 0; }
+  label { display: block; font-size: 14px; color: var(--muted); margin-top: 8px; }
+  input, textarea { width: 100%; font: inherit; font-size: 15px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--fg); }
+  textarea { height: 96px; font-family: ui-monospace, monospace; font-size: 12px; }
+  button { font: inherit; font-size: 15px; padding: 10px 14px; margin: 8px 8px 0 0; border: 0; border-radius: 10px; background: var(--btn); color: var(--btn-fg); }
+  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  details summary { cursor: pointer; color: var(--muted); }
+  video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; margin-top: 8px; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  ul { padding-left: 20px; margin: 4px 0; font-size: 14px; }
+</style>
+<script src="https://accounts.google.com/gsi/client" async></script>
+<script src="https://apis.google.com/js/api.js" async></script>
+</head>
+<body>
+<h1>Ekko 手機測試</h1>
+<p>依序按下面的按鈕，結果會寫在最下面。這是測試頁，不是正式版。</p>
+
+<section>
+  <details id="settings">
+    <summary>設定（第一次要填）</summary>
+    <label>OAuth 用戶端 ID<input id="clientId" autocomplete="off"></label>
+    <label>API 金鑰（只有測試 A 用得到）<input id="apiKey" autocomplete="off"></label>
+    <label>專案編號（只有測試 A 用得到）<input id="projectNumber" inputmode="numeric" autocomplete="off"></label>
+    <label>推播公鑰（電腦上 send-push.mjs keys 印出來的）<input id="vapidKey" autocomplete="off"></label>
+    <button class="secondary" onclick="saveSettings()">儲存</button>
+  </details>
+</section>
+
+<section>
+  <h2>A. 只用單一檔案權限</h2>
+  <small>登入後選「Ekko 手機（測試）」資料夾，看讀不讀得到裡面的檔案。</small><br>
+  <button onclick="testA()">登入並選資料夾</button>
+</section>
+
+<section>
+  <h2>B. 用完整權限</h2>
+  <small>登入時會看到「Google 尚未驗證」，按「繼續」。</small><br>
+  <button onclick="testB()">登入並找資料夾</button>
+  <div id="found"></div>
+</section>
+
+<section>
+  <h2>D. 播放影片</h2>
+  <small>要先通過 A 或 B 找到 v1.mp4。</small><br>
+  <button onclick="playStream()">邊下載邊播</button>
+  <button class="secondary" onclick="playBlob()">整檔下載再播</button>
+  <video id="player" controls playsinline></video>
+</section>
+
+<section>
+  <h2>推播</h2>
+  <small id="pushHint"></small><br>
+  <button onclick="enablePush()">開啟通知</button>
+  <textarea id="subscription" readonly placeholder="開啟通知後，這裡會出現訂閱資料，複製後傳到電腦"></textarea>
+  <button class="secondary" onclick="copySubscription()">複製訂閱資料</button>
+</section>
+
+<section>
+  <h2>結果</h2>
+  <div id="log"></div>
+</section>
+
+<script>
+const FIELDS = ['clientId', 'apiKey', 'projectNumber', 'vapidKey'];
+const DRIVE = 'https://www.googleapis.com/drive/v3';
+let token = null;
+let videoFileId = null;
+
+function load(key) { try { return localStorage.getItem('ekko-spike-' + key) || ''; } catch (_) { return ''; } }
+function store(key, value) { try { localStorage.setItem('ekko-spike-' + key, value); } catch (_) {} }
+function saveSettings() { FIELDS.forEach((f) => store(f, document.getElementById(f).value.trim())); log('設定已儲存'); }
+function setting(key) { return document.getElementById(key).value.trim(); }
+
+function log(text, kind) {
+  const line = document.createElement('div');
+  if (kind) line.className = kind;
+  line.textContent = `${new Date().toLocaleTimeString()}  ${text}`;
+  document.getElementById('log').prepend(line);
+}
+
+function signIn(scope) {
+  return new Promise((resolve, reject) => {
+    if (!setting('clientId')) return reject(new Error('先在「設定」填 OAuth 用戶端 ID'));
+    if (!window.google?.accounts?.oauth2) return reject(new Error('Google 登入元件還沒載入，稍等再按'));
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: setting('clientId'), scope,
+      callback: (r) => r.error ? reject(new Error(r.error_description || r.error)) : resolve(r.access_token),
+      error_callback: (e) => reject(new Error(e.message || e.type)),
+    });
+    client.requestAccessToken();
+  });
+}
+
+async function api(path, params = {}) {
+  const query = new URLSearchParams({ supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', ...params });
+  const r = await fetch(`${DRIVE}/${path}?${query}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!r.ok) throw new Error(`Drive API ${r.status}：${(await r.text()).slice(0, 200)}`);
+  return params.alt === 'media' ? r : r.json();
+}
+
+async function listFolder(folderId) {
+  const r = await api('files', { q: `'${folderId}' in parents and trashed=false`, fields: 'files(id,name,mimeType,size)', pageSize: '100' });
+  return r.files;
+}
+
+async function shareTokenWithWorker() {
+  const registration = await navigator.serviceWorker?.ready;
+  registration?.active?.postMessage({ type: 'token', token });
+}
+
+function remember(files) {
+  const video = files.find((f) => f.name === 'v1.mp4');
+  if (video) videoFileId = video.id;
+}
+
+async function testA() {
+  try {
+    token = await signIn('https://www.googleapis.com/auth/drive.file');
+    await shareTokenWithWorker();
+    log('A：已登入（單一檔案權限）');
+    if (!setting('apiKey') || !setting('projectNumber')) throw new Error('測試 A 要先在「設定」填 API 金鑰與專案編號');
+    await new Promise((resolve) => gapi.load('picker', resolve));
+    const mine = new google.picker.DocsView(google.picker.ViewId.FOLDERS).setSelectFolderEnabled(true).setOwnedByMe(true);
+    const shared = new google.picker.DocsView(google.picker.ViewId.FOLDERS).setSelectFolderEnabled(true).setOwnedByMe(false);
+    const folder = await new Promise((resolve) => {
+      new google.picker.PickerBuilder().addView(mine).addView(shared)
+        .setOAuthToken(token).setDeveloperKey(setting('apiKey')).setAppId(setting('projectNumber'))
+        .setCallback((d) => { if (d.action === 'picked') resolve(d.docs[0]); if (d.action === 'cancel') resolve(null); })
+        .build().setVisible(true);
+    });
+    if (!folder) return log('A：取消選擇');
+    const files = await listFolder(folder.id);
+    remember(files);
+    const sawFiles = files.some((f) => f.name === 'mac.json');
+    log(`A：資料夾「${folder.name}」裡讀到 ${files.length} 個項目：${files.map((f) => f.name).join('、') || '（空的）'}`);
+    log(sawFiles ? 'A 通過：單一檔案權限讀得到電腦傳的檔' : 'A 不通過：讀不到電腦傳的檔，改看 B', sawFiles ? 'ok' : 'bad');
+  } catch (e) { log('A 失敗：' + e.message, 'bad'); }
+}
+
+async function testB() {
+  try {
+    token = await signIn('https://www.googleapis.com/auth/drive');
+    await shareTokenWithWorker();
+    log('B：已登入（完整權限）');
+    const marks = await api('files', { q: "name='mac.json' and trashed=false", fields: 'files(id,parents,owners(displayName,emailAddress))', pageSize: '20' });
+    if (!marks.files.length) return log('B 不通過：找不到任何 mac.json（資料夾還沒共用給這個帳號，或雲端硬碟還沒同步完）', 'bad');
+    const box = document.getElementById('found');
+    box.innerHTML = '';
+    for (const mark of marks.files) {
+      const folderId = mark.parents?.[0];
+      const folder = await api(`files/${folderId}`, { fields: 'id,name' });
+      const files = await listFolder(folderId);
+      const jobs = files.find((f) => f.name === 'jobs');
+      let all = files;
+      if (jobs) for (const job of await listFolder(jobs.id)) all = all.concat(await listFolder(job.id));
+      remember(all);
+      const mac = await (await api(`files/${mark.id}`, { alt: 'media' })).json();
+      const owner = mark.owners?.[0]?.displayName || '';
+      const ul = document.createElement('ul');
+      ul.innerHTML = `<li>資料夾「${folder.name}」（擁有者 ${owner}）</li><li>電腦：${mac.name || '?'}，最後上線 ${mac.lastSeen || '?'}</li><li>找到：${all.map((f) => f.name).join('、')}</li>`;
+      box.append(ul);
+    }
+    log(`B 通過：完整權限找到 ${marks.files.length} 個資料夾並讀到內容`, 'ok');
+  } catch (e) { log('B 失敗：' + e.message, 'bad'); }
+}
+
+async function playStream() {
+  if (!videoFileId) return log('D：還沒找到 v1.mp4，先做 A 或 B', 'bad');
+  if (!navigator.serviceWorker?.controller) return log('D：service worker 還沒接手，重新整理頁面後再試', 'bad');
+  await shareTokenWithWorker();
+  const player = document.getElementById('player');
+  player.src = `drive-media/${videoFileId}`;
+  player.onloadedmetadata = () => log(`D 邊下載邊播：讀到影片資訊（${player.duration.toFixed(1)} 秒）。請拖曳進度條確認可以跳著播`, 'ok');
+  player.onerror = () => log('D 邊下載邊播失敗：' + (player.error?.message || player.error?.code), 'bad');
+  player.play().catch(() => {});
+}
+
+async function playBlob() {
+  if (!videoFileId) return log('D：還沒找到 v1.mp4，先做 A 或 B', 'bad');
+  try {
+    const started = performance.now();
+    const blob = await (await api(`files/${videoFileId}`, { alt: 'media' })).blob();
+    const seconds = ((performance.now() - started) / 1000).toFixed(1);
+    const player = document.getElementById('player');
+    player.src = URL.createObjectURL(new Blob([blob], { type: 'video/mp4' }));
+    log(`D 整檔下載：${(blob.size / 1048576).toFixed(1)} MB，花 ${seconds} 秒`, 'ok');
+    player.play().catch(() => {});
+  } catch (e) { log('D 整檔下載失敗：' + e.message, 'bad'); }
+}
+
+async function enablePush() {
+  try {
+    if (!setting('vapidKey')) throw new Error('先在「設定」填推播公鑰');
+    if (!('PushManager' in window)) throw new Error('這個瀏覽器不支援推播。iPhone 要先「加入主畫面」，再從主畫面打開');
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') throw new Error('通知權限沒有允許（' + permission + '）');
+    const registration = await navigator.serviceWorker.ready;
+    const key = Uint8Array.from(atob(setting('vapidKey').replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+    const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    document.getElementById('subscription').value = JSON.stringify(subscription);
+    log('推播：已開啟。複製訂閱資料傳到電腦，用 send-push.mjs send 發一則測試', 'ok');
+  } catch (e) { log('推播失敗：' + e.message, 'bad'); }
+}
+
+async function copySubscription() {
+  const text = document.getElementById('subscription').value;
+  if (!text) return log('還沒有訂閱資料', 'bad');
+  try { await navigator.clipboard.writeText(text); log('已複製'); } catch (_) { document.getElementById('subscription').select(); log('請長按文字框手動複製'); }
+}
+
+FIELDS.forEach((f) => { document.getElementById(f).value = load(f); });
+if (!load('clientId')) document.getElementById('settings').open = true;
+document.getElementById('pushHint').textContent = navigator.standalone === false
+  ? '目前不是從主畫面打開：先按分享 →「加入主畫面」，再從主畫面打開這頁才能開通知'
+  : '允許通知後，把訂閱資料傳到電腦測試';
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch((e) => log('service worker 註冊失敗：' + e.message, 'bad'));
+</script>
+</body>
+</html>
