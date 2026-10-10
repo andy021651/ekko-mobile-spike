@@ -59,6 +59,7 @@
   <h2>B. 用完整權限</h2>
   <small>登入時會看到「Google 尚未驗證」，按「繼續」。</small><br>
   <button onclick="testB()">登入並找資料夾</button>
+  <button class="secondary" onclick="redirectSignIn()">在這一頁換帳號登入</button>
   <div id="found"></div>
 </section>
 
@@ -164,6 +165,23 @@ async function testA() {
 async function testB() {
   try {
     token = await signIn('https://www.googleapis.com/auth/drive');
+    await findFolders();
+  } catch (e) { log('B 失敗：' + e.message, 'bad'); }
+}
+
+// 不開彈出視窗：整頁跳到 Google 登入，登入完跳回這一頁（網址後面帶通行證）。
+// iPhone 主畫面網頁與自動化測試都比較不會被擋。
+function redirectSignIn() {
+  if (!setting('clientId')) return log('先在「設定」填 OAuth 用戶端 ID', 'bad');
+  const params = new URLSearchParams({
+    client_id: setting('clientId'), redirect_uri: location.origin + location.pathname, response_type: 'token',
+    scope: 'https://www.googleapis.com/auth/drive', include_granted_scopes: 'true', prompt: 'select_account',
+  });
+  location.assign('https://accounts.google.com/o/oauth2/v2/auth?' + params);
+}
+
+async function findFolders() {
+  try {
     await shareTokenWithWorker();
     log('B：已登入（完整權限）');
     const marks = await api('files', { q: "name='mac.json' and trashed=false", fields: 'files(id,parents,owners(displayName,emailAddress))', pageSize: '20' });
@@ -246,6 +264,13 @@ document.getElementById('pushHint').textContent = navigator.standalone === false
   ? '目前不是從主畫面打開：先按分享 →「加入主畫面」，再從主畫面打開這頁才能開通知'
   : '允許通知後，把訂閱資料傳到電腦測試';
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch((e) => log('service worker 註冊失敗：' + e.message, 'bad'));
+// 從 Google 登入跳回來：取出通行證，清掉網址上的資料，接著找資料夾。
+const returned = new URLSearchParams(location.hash.slice(1));
+if (returned.get('access_token') || returned.get('error')) {
+  history.replaceState(null, '', location.pathname);
+  if (returned.get('error')) log('B 失敗：' + returned.get('error'), 'bad');
+  else { token = returned.get('access_token'); findFolders(); }
+}
 </script>
 </body>
 </html>
