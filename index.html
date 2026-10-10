@@ -30,6 +30,7 @@
   .ok { color: var(--ok); } .bad { color: var(--bad); }
   ul { padding-left: 20px; margin: 4px 0; font-size: 14px; }
 </style>
+<script src="config.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
 <script src="https://apis.google.com/js/api.js" async></script>
 </head>
@@ -91,7 +92,8 @@ let videoFileId = null;
 function load(key) { try { return localStorage.getItem('ekko-spike-' + key) || ''; } catch (_) { return ''; } }
 function store(key, value) { try { localStorage.setItem('ekko-spike-' + key, value); } catch (_) {} }
 function saveSettings() { FIELDS.forEach((f) => store(f, document.getElementById(f).value.trim())); log('設定已儲存'); }
-function setting(key) { return document.getElementById(key).value.trim(); }
+const BUILT_IN = window.EKKO_CONFIG || {};
+function setting(key) { return (BUILT_IN[key] || document.getElementById(key).value).trim(); }
 
 function log(text, kind) {
   const line = document.createElement('div');
@@ -230,8 +232,14 @@ async function copySubscription() {
   try { await navigator.clipboard.writeText(text); log('已複製'); } catch (_) { document.getElementById('subscription').select(); log('請長按文字框手動複製'); }
 }
 
-FIELDS.forEach((f) => { document.getElementById(f).value = load(f); });
-if (!load('clientId')) document.getElementById('settings').open = true;
+// 內建好的欄位不顯示；全部內建時整個「設定」藏起來，使用者只要按登入。
+FIELDS.forEach((f) => {
+  const input = document.getElementById(f);
+  if (BUILT_IN[f]) input.closest('label').hidden = true; else input.value = load(f);
+});
+const missing = FIELDS.filter((f) => !BUILT_IN[f]);
+if (!missing.length) document.getElementById('settings').closest('section').hidden = true;
+else if (missing.some((f) => !load(f))) document.getElementById('settings').open = true;
 document.getElementById('pushHint').textContent = navigator.standalone === false
   ? '目前不是從主畫面打開：先按分享 →「加入主畫面」，再從主畫面打開這頁才能開通知'
   : '允許通知後，把訂閱資料傳到電腦測試';
